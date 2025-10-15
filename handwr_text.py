@@ -2,6 +2,8 @@ from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from PIL import Image
 import cv2
 import torch
+import sys
+import os
 
 '''
 requirements:
@@ -32,6 +34,19 @@ def preprocess_image(path):
     
     return Image.open(cleaned_path).convert("RGB")
 
+def get_img():
+    if len(sys.argv) < 2:
+        print("Error: No image path provided.")
+        print(f"Usage: python {sys.argv[0]} <image_path>")
+        sys.exit(1)
+        
+    img_path = sys.argv[1]
+    if not os.path.exists(img_path):
+        print(f"Error: image file not found at path: '{img_path}'")
+        sys.exit(1)
+        
+    return img_path
+
 # extract HW with OCR 
 def extract_handwriting_text(image_path):
     image = preprocess_image(image_path)
@@ -46,7 +61,7 @@ def extract_handwriting_text(image_path):
 
 # entry
 if __name__ == "__main__":
-    img_path = "mhid_pic.png"  # replace with your image file
+    img_path = get_img() # get the image path
     extracted_text = extract_handwriting_text(img_path)
     print("Extracted Text:")
     print(extracted_text)
