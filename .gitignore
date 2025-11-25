@@ -1,0 +1,5 @@
+.env.local
+backend/_uploads/
+backend/_drive/
+node_modules/
+.next/
