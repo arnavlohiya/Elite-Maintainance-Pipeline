@@ -10,16 +10,14 @@ VIDEO_PATH = Path.cwd() / Path('360_files/GS012395.mp4') # path to dummy video t
 the whiteboard-detecting script to rename the video file '''
 
 def sanitize_filename(text: str) -> str: 
-    ''' cleans OCR text into a safe, readable filename
-        removes invalid characters and trims whitespace
-        converts whitespace to underscore '''
-    clean = re.sub(r'[<>:"/\\|?*\n\r\t]+', '', text)
-    clean = re.sub(r'\s+', '_', clean)
-    clean = clean.strip(string.punctuation + '_ ') # trim punctuation chars
-    clean = re.sub(r'_+', '_', clean) # multiple underscores become single one
-    clean = clean.upper() # uppercase for consistency
+    # cleans OCR text into a safe, readable filename
+    clean = re.sub(r'[<>:"/\\|?*\n\r\t]+', '', text) # removes invalid characters and trims whitespace
+    clean = re.sub(r'\s+', '_', clean)               # convert whitespace to underscores
+    clean = clean.strip(string.punctuation + '_ ')   # trim punctuation chars
+    clean = re.sub(r'_+', '_', clean)                # multiple underscores become single one
+    clean = clean.upper()                            # uppercase for consistency
     
-    if len(clean) > 50: # limit filename length if necessary
+    if len(clean) > 50:     # limit filename length if necessary
         clean = clean[:50]
 
     return clean or "unnamed_video"
