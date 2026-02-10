@@ -3,3 +3,19 @@ backend/_uploads/
 backend/_drive/
 node_modules/
 .next/
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Local databases
+*.db
+
+# Virtual environments
+.venv/
+venv/
+
+# Node
+node_modules/
