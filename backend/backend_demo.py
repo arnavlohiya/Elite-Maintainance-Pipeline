@@ -5,11 +5,11 @@ What this gives you (single file):
 - FastAPI backend with /healthz, /upload, /jobs, /jobs/{id}, /agent/process/{whiteboard_id}
 - Background task that "OCRs" the upload (fake) and pushes to a local folder that simulates Google Drive
 - Agent endpoint to simulate Agisoft processing and publishing results back to the "Drive"
-- In‑memory job store (no DB) so it runs without setup
+- SQLite database for persistent job storage (survives server restarts)
 
 Install & run:
   pip install fastapi uvicorn python-multipart
-  uvicorn mini_backend_pipeline:app --reload
+  uvicorn backend_demo:app --reload
 
 Try it:
   1) POST a .360 file to /upload (use curl or Postman)
@@ -39,6 +39,8 @@ import time
 import json
 import re
 import uuid
+import sqlite3
+from contextlib import contextmanager
 
 # ----------------------------
 # Paths & pseudo-Drive layout
@@ -48,6 +50,7 @@ UPLOADS_DIR = BASE / "_uploads"
 DRIVE_ROOT = BASE / "_drive"
 TO_PROCESS = DRIVE_ROOT / "ToProcess"
 PROCESSED = DRIVE_ROOT / "Processed"
+DB_PATH = BASE / "jobs.db"
 for p in (UPLOADS_DIR, TO_PROCESS, PROCESSED):
     p.mkdir(parents=True, exist_ok=True)
 
@@ -68,8 +71,119 @@ class Job(BaseModel):
     notes: list[str] = []
 
 
-JOBS: dict[str, Job] = {}
-IDX_BY_WBID: dict[str, str] = {}
+# ----------------------------
+# SQLite Database
+# ----------------------------
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                original_name TEXT NOT NULL,
+                whiteboard_id TEXT,
+                status TEXT NOT NULL,
+                ocr_confidence REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                artifacts TEXT,
+                notes TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_whiteboard_id
+            ON jobs(whiteboard_id)
+        """)
+        conn.commit()
+
+def save_job(job: Job):
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO jobs
+            (id, original_name, whiteboard_id, status, ocr_confidence,
+             created_at, updated_at, artifacts, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job.id,
+            job.original_name,
+            job.whiteboard_id,
+            job.status,
+            job.ocr_confidence,
+            job.created_at,
+            job.updated_at,
+            json.dumps(job.artifacts),
+            json.dumps(job.notes)
+        ))
+        conn.commit()
+
+def get_job_by_id(job_id: str) -> Optional[Job]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return Job(
+            id=row["id"],
+            original_name=row["original_name"],
+            whiteboard_id=row["whiteboard_id"],
+            status=row["status"],
+            ocr_confidence=row["ocr_confidence"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            artifacts=json.loads(row["artifacts"]) if row["artifacts"] else [],
+            notes=json.loads(row["notes"]) if row["notes"] else []
+        )
+
+def get_job_by_whiteboard_id(whiteboard_id: str) -> Optional[Job]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE whiteboard_id = ?", (whiteboard_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return Job(
+            id=row["id"],
+            original_name=row["original_name"],
+            whiteboard_id=row["whiteboard_id"],
+            status=row["status"],
+            ocr_confidence=row["ocr_confidence"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            artifacts=json.loads(row["artifacts"]) if row["artifacts"] else [],
+            notes=json.loads(row["notes"]) if row["notes"] else []
+        )
+
+def get_all_jobs() -> list[Job]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC"
+        ).fetchall()
+        return [
+            Job(
+                id=row["id"],
+                original_name=row["original_name"],
+                whiteboard_id=row["whiteboard_id"],
+                status=row["status"],
+                ocr_confidence=row["ocr_confidence"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                artifacts=json.loads(row["artifacts"]) if row["artifacts"] else [],
+                notes=json.loads(row["notes"]) if row["notes"] else []
+            )
+            for row in rows
+        ]
+
+# Initialize database on startup
+init_db()
 
 # ----------------------------
 # Simulated Drive adapter
@@ -113,13 +227,16 @@ def fake_ocr_guess_id(file_path: Path) -> tuple[str, float]:
     return f"WB{short}", 0.50
 
 def run_ocr_and_push(job_id: str, src_path: Path):
-    job = JOBS[job_id]
+    job = get_job_by_id(job_id)
+    if not job:
+        raise RuntimeError(f"Job {job_id} not found")
     try:
         wbid, conf = fake_ocr_guess_id(src_path)
         job.whiteboard_id = wbid
         job.ocr_confidence = conf
         job.status = "OCR_OK" if conf >= 0.85 else "NEEDS_REVIEW"
         job.updated_at = time.time()
+        save_job(job)
 
         canonical_name = f"{wbid}.360"
         manifest = {
@@ -134,20 +251,20 @@ def run_ocr_and_push(job_id: str, src_path: Path):
         }
         DRIVE.push_video(src_path, wbid)
         DRIVE.write_manifest(wbid, manifest)
-        IDX_BY_WBID[wbid] = job.id
         job.status = "PUSHED_TO_DRIVE"
         job.updated_at = time.time()
+        save_job(job)
     except Exception as e:
         job.status = "FAILED"
         job.notes.append(f"pipeline error: {e}")
         job.updated_at = time.time()
+        save_job(job)
         raise
 
 def simulate_agent_process(wbid: str):
-    job_id = IDX_BY_WBID.get(wbid)
-    if not job_id:
+    job = get_job_by_whiteboard_id(wbid)
+    if not job:
         raise RuntimeError(f"no job found for whiteboard_id={wbid}")
-    job = JOBS[job_id]
 
     toproc = TO_PROCESS / wbid
     video = toproc / "video.360"
@@ -157,6 +274,7 @@ def simulate_agent_process(wbid: str):
 
     job.status = "PROCESSING"
     job.updated_at = time.time()
+    save_job(job)
 
     time.sleep(1.0)
     out = DRIVE.ensure_processed(wbid)
@@ -166,11 +284,11 @@ def simulate_agent_process(wbid: str):
     (out / "logs").mkdir(exist_ok=True)
 
     (out / "model" / "viewer.glb").write_bytes(b"glb-placeholder")
-    (out / "report" / f"{wbid}_report.txt").write_text("Demo report for job " + job_id)
+    (out / "report" / f"{wbid}_report.txt").write_text("Demo report for job " + job.id)
     (out / "logs" / "run.log").write_text("Simulated Metashape run OK")
 
     done = {
-        "job_id": job_id,
+        "job_id": job.id,
         "whiteboard_id": wbid,
         "artifacts": [
             {"kind": "MODEL", "path": str((out / "model" / "viewer.glb").resolve())},
@@ -183,6 +301,7 @@ def simulate_agent_process(wbid: str):
     job.artifacts = done["artifacts"]
     job.status = "PROCESSED"
     job.updated_at = time.time()
+    save_job(job)
 
 # ----------------------------
 # FastAPI app & endpoints
@@ -221,7 +340,7 @@ async def upload(file: UploadFile, background_tasks: BackgroundTasks):
         shutil.copyfileobj(file.file, f)
 
     job = Job(id=job_id, original_name=file.filename)
-    JOBS[job_id] = job
+    save_job(job)
 
     background_tasks.add_task(run_ocr_and_push, job_id, dest)
 
@@ -229,11 +348,11 @@ async def upload(file: UploadFile, background_tasks: BackgroundTasks):
 
 @app.get("/jobs")
 def list_jobs():
-    return {"data": [j.model_dump() for j in JOBS.values()]}
+    return {"data": [j.model_dump() for j in get_all_jobs()]}
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    job = JOBS.get(job_id)
+    job = get_job_by_id(job_id)
     if not job:
         raise HTTPException(404, "job not found")
     return job
@@ -242,7 +361,8 @@ def get_job(job_id: str):
 def agent_process(whiteboard_id: str):
     try:
         simulate_agent_process(whiteboard_id)
-        job_id = IDX_BY_WBID.get(whiteboard_id)
+        job = get_job_by_whiteboard_id(whiteboard_id)
+        job_id = job.id if job else None
         return {"ok": True, "job_id": job_id}
     except Exception as e:
         raise HTTPException(400, str(e))

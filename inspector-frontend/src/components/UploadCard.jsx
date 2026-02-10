@@ -18,6 +18,7 @@ export default function UploadCard() {
   const [uploads, setUploads] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [completedBatch, setCompletedBatch] = useState(false);
   const fileInputRef = useRef(null);
 
   const onFileChange = (e) => {
@@ -33,6 +34,7 @@ export default function UploadCard() {
     }));
     setUploads(selected);
     setError(null);
+    setCompletedBatch(false);
   };
 
   const updateUpload = (key, updates) => {
@@ -116,6 +118,7 @@ export default function UploadCard() {
     }
 
     setIsUploading(false);
+    setCompletedBatch(true);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -143,8 +146,9 @@ export default function UploadCard() {
           />
           <Button
             variant="outlined"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => !completedBatch && fileInputRef.current?.click()}
             sx={{ alignSelf: 'flex-start' }}
+            disabled={completedBatch}
           >
             Choose files
           </Button>
@@ -201,10 +205,14 @@ export default function UploadCard() {
       <CardActions>
         <Button
           onClick={onUpload}
-          disabled={uploads.length === 0 || isUploading}
+          disabled={uploads.length === 0 || isUploading || completedBatch}
           variant="contained"
         >
-          {isUploading ? 'Uploading…' : 'Upload to Drive'}
+          {completedBatch
+            ? 'Uploaded to Drive'
+            : isUploading
+            ? 'Uploading…'
+            : 'Upload to Drive'}
         </Button>
       </CardActions>
     </Card>

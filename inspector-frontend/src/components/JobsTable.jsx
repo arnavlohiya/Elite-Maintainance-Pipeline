@@ -20,7 +20,15 @@ import {
   TextField,
   MenuItem,
   Stack,
+  Alert,
+  AlertTitle,
+  IconButton,
+  Tooltip,
+  Chip,
+  Box,
 } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import StorageIcon from '@mui/icons-material/Storage';
 import StatusPill from '@/components/StatusPill';
 
 const STATUS_OPTIONS = [
@@ -36,7 +44,7 @@ const STATUS_OPTIONS = [
 
 export default function JobsTable() {
   const router = useRouter();
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['jobs'],
     queryFn: listJobs,
     refetchInterval: 5000,
@@ -46,6 +54,7 @@ export default function JobsTable() {
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [showPersistenceInfo, setShowPersistenceInfo] = useState(true);
 
   const filteredJobs = useMemo(() => {
     if (!data) return [];
@@ -71,43 +80,99 @@ export default function JobsTable() {
     setPage(0);
   };
 
+  const oldestJob = useMemo(() => {
+    if (!data || data.length === 0) return null;
+    return data.reduce((oldest, job) =>
+      !oldest || job.created_at < oldest.created_at ? job : oldest
+    );
+  }, [data]);
+
   if (isLoading) return <CircularProgress />;
   if (error) return <Typography color="error">Failed to load jobs</Typography>;
-  if (!data || data.length === 0)
-    return <Typography>No jobs yet. Upload a .360 file to get started.</Typography>;
 
   const start = page * rowsPerPage;
   const end = start + rowsPerPage;
   const pageRows = filteredJobs.slice(start, end);
 
   return (
-    <Paper>
-      <Stack direction="row" spacing={2} sx={{ p: 2, pb: 0 }} alignItems="center">
-        <TextField
-          size="small"
-          label="Search jobs"
-          placeholder="job id or WB id"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <TextField
-          size="small"
-          select
-          label="Status"
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setPage(0);
-          }}
-          sx={{ minWidth: 150 }}
+    <>
+      {showPersistenceInfo && data && data.length > 0 && (
+        <Alert
+          severity="info"
+          icon={<StorageIcon />}
+          onClose={() => setShowPersistenceInfo(false)}
+          sx={{ mb: 2 }}
         >
-          {STATUS_OPTIONS.map((s) => (
-            <MenuItem key={s} value={s}>
-              {s}
-            </MenuItem>
-          ))}
-        </TextField>
-      </Stack>
+          <AlertTitle>SQLite Database Active</AlertTitle>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Jobs are persisted in SQLite. To test persistence: upload a job, then restart the backend server
+            with <code>pkill -f uvicorn && uvicorn backend_demo:app --reload</code> in the backend directory.
+          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Chip
+              size="small"
+              label={`${data.length} job${data.length !== 1 ? 's' : ''} in database`}
+              color="primary"
+              variant="outlined"
+            />
+            {oldestJob && (
+              <Chip
+                size="small"
+                label={`Oldest: ${new Date(oldestJob.created_at * 1000).toLocaleString()}`}
+                variant="outlined"
+              />
+            )}
+            <Chip
+              size="small"
+              label={`Last fetch: ${new Date(dataUpdatedAt).toLocaleTimeString()}`}
+              variant="outlined"
+            />
+          </Stack>
+        </Alert>
+      )}
+
+      {!data || data.length === 0 ? (
+        <Paper sx={{ p: 3, textAlign: 'center' }}>
+          <Typography variant="h6" gutterBottom>No jobs yet</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Upload a .360 file to get started. Jobs will persist across server restarts.
+          </Typography>
+        </Paper>
+      ) : (
+        <Paper>
+          <Stack direction="row" spacing={2} sx={{ p: 2, pb: 0 }} alignItems="center" justifyContent="space-between">
+            <Stack direction="row" spacing={2} alignItems="center" sx={{ flex: 1 }}>
+              <TextField
+                size="small"
+                label="Search jobs"
+                placeholder="job id or WB id"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <TextField
+                size="small"
+                select
+                label="Status"
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(0);
+                }}
+                sx={{ minWidth: 150 }}
+              >
+                {STATUS_OPTIONS.map((s) => (
+                  <MenuItem key={s} value={s}>
+                    {s}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Stack>
+            <Tooltip title="Refresh jobs">
+              <IconButton onClick={() => refetch()} size="small">
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          </Stack>
 
       <TableContainer>
         <Table size="small">
@@ -141,15 +206,17 @@ export default function JobsTable() {
         </Table>
       </TableContainer>
 
-      <TablePagination
-        component="div"
-        count={filteredJobs.length}
-        page={page}
-        onPageChange={handleChangePage}
-        rowsPerPage={rowsPerPage}
-        onRowsPerPageChange={handleChangeRowsPerPage}
-        rowsPerPageOptions={[5, 10, 25, 50]}
-      />
-    </Paper>
+          <TablePagination
+            component="div"
+            count={filteredJobs.length}
+            page={page}
+            onPageChange={handleChangePage}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={handleChangeRowsPerPage}
+            rowsPerPageOptions={[5, 10, 25, 50]}
+          />
+        </Paper>
+      )}
+    </>
   );
 }
