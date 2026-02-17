@@ -5,3 +5,4 @@ __pycache__
 _uploads
 *.360
 token.json
+.env

@@ -32,6 +32,7 @@ from pathlib import Path
 import shutil, hashlib, logging
 import time, json, re, uuid, io
 import os, ocr
+from dotenv import load_dotenv
 
 # --- Google Drive Integration ---
 from google.oauth2.credentials import Credentials
@@ -44,10 +45,15 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables from .env file
+load_dotenv()
+
 # --- Configuration ---
 SCOPES = ['https://www.googleapis.com/auth/drive']
 # Default ID provided, but allows override via environment variable
-GDRIVE_ROOT_FOLDER_ID = os.getenv("GDRIVE_ROOT_FOLDER_ID", "1i17h9Rz4eqlnV1eEOaG_XtaP9XXErYgC")
+GDRIVE_ROOT_FOLDER_ID = os.getenv("GDRIVE_ROOT_FOLDER_ID")
+if not GDRIVE_ROOT_FOLDER_ID:
+    raise RuntimeError("GDRIVE_ROOT_FOLDER_ID is not set. Please check your .env file.")
 
 # Paths
 BASE = Path(__file__).resolve().parent
@@ -151,6 +157,12 @@ class GoogleDrive:
         if not processed_root_id: return None
         return self._get_or_create_folder(wbid, processed_root_id)
 
+    # def write_manifest(self, manifest: dict, parent_folder_id: str | None):
+    #     if not self.service or not parent_folder_id: return
+    #     file_metadata = {'name': 'manifest.json', 'parents': [parent_folder_id]}
+    #     manifest_bytes = json.dumps(manifest, indent=2).encode('utf-8')
+    #     media = MediaIoBaseUpload(io.BytesIO(manifest_bytes), mimetype='application/json', resumable=True)
+    #     self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     def write_manifest(self, manifest: dict, parent_folder_id: str | None):
         if not self.service or not parent_folder_id: return
         final_name = self._get_unique_name(parent_folder_id, "manifest.json")
@@ -178,9 +190,9 @@ class GoogleDrive:
                 return new_name
             counter += 1
 
-    def push_video(self, src_path: Path, parent_folder_id: str | None):
+    def push_video(self, src_path: Path, parent_folder_id: str | None, name: str):
         if not self.service or not parent_folder_id: return None
-        final_name = self._get_unique_name(parent_folder_id, "video.360")
+        final_name = self._get_unique_name(parent_folder_id, name)
         file_metadata = {'name': final_name, 'parents': [parent_folder_id]}
         media = MediaFileUpload(str(src_path), mimetype='application/octet-stream', resumable=True)
         file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
@@ -220,14 +232,14 @@ def run_ocr_and_push(job_id: str, src_path: Path):
     job = JOBS[job_id]
     try:
         # 1) OCR
-        wbid, conf = fake_ocr_guess_id(src_path)
+        wbid, conf = fake_ocr_guess_id(Path(job.original_name))
         job.whiteboard_id = wbid
         job.ocr_confidence = conf
         job.status = "OCR_OK" if conf >= 0.85 else "NEEDS_REVIEW"
         job.updated_at = time.time()
 
         # 2) Canonicalize name & push to "Drive"
-        canonical_name = f"{wbid}.360"
+        canonical_name = job.original_name
         
         # Calculate Checksum
         checksum = calculate_sha256(src_path)
@@ -247,7 +259,7 @@ def run_ocr_and_push(job_id: str, src_path: Path):
             raise Exception("Google Drive service is not available.")
 
         to_process_folder_id = DRIVE.ensure_to_process(wbid)
-        DRIVE.push_video(src_path, to_process_folder_id)
+        DRIVE.push_video(src_path, to_process_folder_id, canonical_name)
         DRIVE.write_manifest(manifest, to_process_folder_id)
         IDX_BY_WBID[wbid] = job.id
         job.status = "PUSHED_TO_DRIVE"
