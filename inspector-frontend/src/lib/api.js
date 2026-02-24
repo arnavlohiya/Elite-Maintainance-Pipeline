@@ -35,11 +35,35 @@ export async function triggerAgent(whiteboardId) {
   const res = await fetch(`${BASE_URL}/agent/process/${whiteboardId}`, {
     method: 'POST'
   });
-  
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Agent failed: ${text}`);
   }
-  
+
   return res.json();
+}
+
+export async function uploadModel(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${BASE_URL}/models/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Model upload failed: ${res.status} ${text}`);
+  }
+
+  return res.json();
+}
+
+export async function listModels() {
+  const res = await fetch(`${BASE_URL}/models`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to fetch models');
+  const data = await res.json();
+  return data.data;
 }

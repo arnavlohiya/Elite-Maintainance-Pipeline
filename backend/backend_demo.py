@@ -32,6 +32,7 @@ from __future__ import annotations
 from fastapi import FastAPI, UploadFile, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 import shutil
@@ -51,7 +52,8 @@ DRIVE_ROOT = BASE / "_drive"
 TO_PROCESS = DRIVE_ROOT / "ToProcess"
 PROCESSED = DRIVE_ROOT / "Processed"
 DB_PATH = BASE / "jobs.db"
-for p in (UPLOADS_DIR, TO_PROCESS, PROCESSED):
+MODELS_DIR = BASE / "_models"
+for p in (UPLOADS_DIR, TO_PROCESS, PROCESSED, MODELS_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
 # ----------------------------
@@ -322,6 +324,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.mount("/static/models", StaticFiles(directory=str(MODELS_DIR)), name="static_models")
+
+ALLOWED_MODEL_EXTS = {'.glb', '.gltf'}
 
 @app.get("/healthz")
 def healthz():
@@ -366,3 +371,35 @@ def agent_process(whiteboard_id: str):
         return {"ok": True, "job_id": job_id}
     except Exception as e:
         raise HTTPException(400, str(e))
+
+@app.post("/models/upload")
+async def upload_model(file: UploadFile):
+    if not file.filename:
+        raise HTTPException(400, "filename required")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_MODEL_EXTS:
+        raise HTTPException(422, f"Unsupported type. Allowed: {', '.join(ALLOWED_MODEL_EXTS)}")
+
+    safe_name = f"{uuid.uuid4().hex[:8]}_{file.filename}"
+    dest = MODELS_DIR / safe_name
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    return {
+        "filename": safe_name,
+        "original_name": file.filename,
+        "url": f"/static/models/{safe_name}",
+    }
+
+@app.get("/models")
+def list_models():
+    models = []
+    for f in sorted(MODELS_DIR.iterdir(), key=lambda x: -x.stat().st_mtime):
+        if f.suffix.lower() in ALLOWED_MODEL_EXTS:
+            models.append({
+                "filename": f.name,
+                "url": f"/static/models/{f.name}",
+                "size_bytes": f.stat().st_size,
+                "uploaded_at": f.stat().st_mtime,
+            })
+    return {"data": models}

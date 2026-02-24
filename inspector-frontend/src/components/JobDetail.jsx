@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getJob, triggerAgent } from '@/lib/api';
+import { useRouter } from 'next/navigation';
 import {
   Card,
   CardContent,
@@ -17,8 +18,8 @@ import {
   Step,
   StepLabel,
   Divider,
-  Link as MuiLink,
 } from '@mui/material';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import StatusPill from '@/components/StatusPill';
 
 const PIPELINE_STEPS = [
@@ -38,6 +39,7 @@ function stepIndexForStatus(status) {
 
 export default function JobDetail({ jobId }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [agentError, setAgentError] = useState(null);
 
   const { data: job, isLoading, error } = useQuery({
@@ -153,13 +155,23 @@ export default function JobDetail({ jobId }) {
 
           {modelArtifacts.length > 0 && (
             <>
-              <Typography variant="subtitle1">3D model</Typography>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                <Typography variant="subtitle1">3D model</Typography>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<ViewInArIcon />}
+                  onClick={() => router.push('/viewer')}
+                >
+                  View 3D Model
+                </Button>
+              </Stack>
               <List dense>
                 {modelArtifacts.map((a, i) => (
                   <ListItem key={`model-${i}`}>
                     <ListItemText
                       primary={a.path}
-                      secondary="GLB model produced by the agent. For now, open it with a local GLB viewer."
+                      secondary="Upload this GLB file to the 3D Viewer to inspect it in the browser."
                     />
                   </ListItem>
                 ))}

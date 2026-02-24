@@ -12,6 +12,7 @@ export default function Navbar() {
         <Link href="/">Home</Link>
         <Link href="/upload">Upload</Link>
         <Link href="/jobs">Jobs</Link>
+        <Link href="/viewer">3D Viewer</Link>
       </div>
 
       <div>

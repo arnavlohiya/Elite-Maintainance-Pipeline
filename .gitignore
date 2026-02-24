@@ -1,8 +1,12 @@
 .env.local
 backend/_uploads/
 backend/_drive/
+backend/_models/
 node_modules/
 .next/
+# IDE
+.vscode/
+
 # macOS
 .DS_Store
 
