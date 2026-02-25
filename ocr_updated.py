@@ -134,6 +134,8 @@ class WhiteboardDetector:
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel, iterations=2)
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
+        #Arnav Lohiya: Removed a line that was elsewhere - P.S remove this comment.
+        
         # Find contours (boundaries) of white regions
         # RETR_EXTERNAL: only get outermost contours (ignore holes)
         # CHAIN_APPROX_SIMPLE: compress contours to save memory
