@@ -1,15 +1,15 @@
 """
-Minimal runnable demo of the inspector → backend → "Drive" → agent → model round‑trip.
+Minimal runnable demo of the inspector → backend → Google Drive → agent → model round‑trip.
 
 What this gives you (single file):
 - FastAPI backend with /healthz, /upload, /jobs, /jobs/{id}, /agent/process/{whiteboard_id}
-- Background task that "OCRs" the upload (fake) and pushes to a local folder that simulates Google Drive
-- Agent endpoint to simulate Agisoft processing and publishing results back to the "Drive"
+- Background task that "OCRs" the upload (fake) and pushes to Google Drive
+- Agent endpoint to simulate Agisoft processing and publishing results back to Drive
 - In‑memory job store (no DB) so it runs without setup
 
 Install & run:
-  pip install fastapi uvicorn python-multipart
-  uvicorn mini_backend_pipeline:app --reload
+  pip install fastapi uvicorn python-multipart google-api-python-client google-auth-oauthlib
+  uvicorn backendDemo:app --reload
 
 Try it:
   1) POST a .360 file to /upload (use curl or Postman)
@@ -18,41 +18,51 @@ Try it:
      curl http://127.0.0.1:8000/jobs
   3) Simulate the sponsor agent processing (choose the whiteboard_id from the job):
      curl -X POST http://127.0.0.1:8000/agent/process/GS010016
-  4) Re‑check /jobs and see PROCESSED with artifact paths
+  4) Re-check /jobs and see PROCESSED with artifact paths
 
 Folders created in the working directory:
   _uploads/                 # transient upload stash
-  _drive/ToProcess/{ID}/    # simulates Google Drive ToProcess
-  _drive/Processed/{ID}/    # simulates Google Drive Processed
 
-Replace the LocalDrive class later with a real Google Drive adapter.
+Replace the fake OCR logic later with real processing.
 """
-
 from __future__ import annotations
 from fastapi import FastAPI, UploadFile, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pathlib import Path
-import shutil
-import time
-import json
-import re
-import uuid
+import shutil, hashlib, logging
+import time, json, re, uuid, io
+import os, ocr
+from dotenv import load_dotenv
 
-# ----------------------------
-# Paths & pseudo-Drive layout
-# ----------------------------
-BASE = Path(__file__).parent.resolve()
+# --- Google Drive Integration ---
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
+
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- Configuration ---
+SCOPES = ['https://www.googleapis.com/auth/drive']
+# Default ID provided, but allows override via environment variable
+GDRIVE_ROOT_FOLDER_ID = os.getenv("GDRIVE_ROOT_FOLDER_ID")
+if not GDRIVE_ROOT_FOLDER_ID:
+    raise RuntimeError("GDRIVE_ROOT_FOLDER_ID is not set. Please check your .env file.")
+
+# Paths
+BASE = Path(__file__).resolve().parent
 UPLOADS_DIR = BASE / "_uploads"
-DRIVE_ROOT = BASE / "_drive"
-TO_PROCESS = DRIVE_ROOT / "ToProcess"
-PROCESSED = DRIVE_ROOT / "Processed"
-for p in (UPLOADS_DIR, TO_PROCESS, PROCESSED):
-    p.mkdir(parents=True, exist_ok=True)
+# Assumes client_secret.json is two levels up from this script (repo root)
+CLIENT_SECRET_FILE = BASE.parent.parent / "client_secret.json"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ----------------------------
-# In-memory data models
-# ----------------------------
+# --- In-memory data models ---
 class Job(BaseModel):
     id: str
     original_name: str
@@ -67,38 +77,143 @@ class Job(BaseModel):
 JOBS: dict[str, Job] = {}
 IDX_BY_WBID: dict[str, str] = {}  # whiteboard_id -> job_id
 
-# ----------------------------
-# Simulated Drive adapter
-# ----------------------------
-class LocalDrive:
-    def __init__(self, root: Path):
-        self.root = root
+# --- Helper Functions ---
+def calculate_sha256(file_path: Path) -> str:
+    """Calculates the SHA256 checksum of a file efficiently."""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            # Read in 8k chunks to avoid memory issues with large files
+            for byte_block in iter(lambda: f.read(8192), b""):
+                sha256_hash.update(byte_block)
+        return f"sha256:{sha256_hash.hexdigest()}"
+    except FileNotFoundError:
+        return "sha256:ERROR_FILE_NOT_FOUND"
 
-    def ensure_to_process(self, wbid: str) -> Path:
-        d = TO_PROCESS / wbid
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+# --- Google Drive adapter ---
+class GoogleDrive:
+    """Adapter for interacting with Google Drive."""
+    def __init__(self, client_secret_file: Path, root_folder_id: str):
+        try:
+            creds = None
+            token_path = BASE / 'token.json'
+            
+            # The file token.json stores the user's access and refresh tokens
+            if token_path.exists():
+                creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+            
+            # If there are no (valid) credentials available, let the user log in.
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    if not client_secret_file.exists():
+                        raise FileNotFoundError(f"Client secret not found at {client_secret_file}")
+                    flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_file), SCOPES)
+                    creds = flow.run_local_server(port=0)
+                # Save the credentials for the next run
+                with open(token_path, 'w') as token:
+                    token.write(creds.to_json())
 
-    def ensure_processed(self, wbid: str) -> Path:
-        d = PROCESSED / wbid
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+            self.service = build('drive', 'v3', credentials=creds)
+            self.root_folder_id = root_folder_id
+            self.folder_ids_cache = {}  # Cache to reduce API calls: (name, parent_id) -> folder_id
+            print("Successfully connected to Google Drive (User Auth).")
+        except Exception as e:
+            print(f"ERROR: Failed to initialize Google Drive: {e}")
+            self.service = None
 
-    def write_manifest(self, wbid: str, manifest: dict):
-        folder = self.ensure_to_process(wbid)
-        (folder / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    def _get_or_create_folder(self, name: str, parent_id: str) -> str | None:
+        if not self.service: return None
+        cache_key = (name, parent_id)
+        if cache_key in self.folder_ids_cache:
+            return self.folder_ids_cache[cache_key]
+        
+        query = f"name='{name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        response = self.service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        files = response.get('files', [])
+        
+        if files:
+            folder_id = files[0]['id']
+        else:
+            file_metadata = {'name': name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
+            folder = self.service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = folder['id']
+            
+        self.folder_ids_cache[cache_key] = folder_id
+        return folder_id
+        
+    def ensure_to_process(self, wbid: str) -> str | None:
+        """Ensures ToProcess/{wbid} folder exists and returns the wbid folder ID."""
+        if not self.service: return None
+        to_process_root_id = self._get_or_create_folder("ToProcess", self.root_folder_id)
+        if not to_process_root_id: return None
+        return self._get_or_create_folder(wbid, to_process_root_id)
 
-    def push_video(self, src_path: Path, wbid: str):
-        folder = self.ensure_to_process(wbid)
-        dest = folder / "video.360"
-        shutil.copy2(src_path, dest)
-        return dest
+    def ensure_processed(self, wbid: str) -> str | None:
+        """Ensures Processed/{wbid} folder exists and returns the wbid folder ID."""
+        if not self.service: return None
+        processed_root_id = self._get_or_create_folder("Processed", self.root_folder_id)
+        if not processed_root_id: return None
+        return self._get_or_create_folder(wbid, processed_root_id)
 
-DRIVE = LocalDrive(DRIVE_ROOT)
+    # def write_manifest(self, manifest: dict, parent_folder_id: str | None):
+    #     if not self.service or not parent_folder_id: return
+    #     file_metadata = {'name': 'manifest.json', 'parents': [parent_folder_id]}
+    #     manifest_bytes = json.dumps(manifest, indent=2).encode('utf-8')
+    #     media = MediaIoBaseUpload(io.BytesIO(manifest_bytes), mimetype='application/json', resumable=True)
+    #     self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    def write_manifest(self, manifest: dict, parent_folder_id: str | None):
+        if not self.service or not parent_folder_id: return
+        final_name = self._get_unique_name(parent_folder_id, "manifest.json")
+        file_metadata = {'name': final_name, 'parents': [parent_folder_id]}
+        manifest_bytes = json.dumps(manifest, indent=2).encode('utf-8')
+        media = MediaIoBaseUpload(io.BytesIO(manifest_bytes), mimetype='application/json', resumable=True)
+        self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-# ----------------------------
-# Fake OCR (extract digits/letters from filename)
-# ----------------------------
+    def _get_unique_name(self, parent_id: str, desired_name: str) -> str:
+        if not self.service: return desired_name
+        
+        # Get all filenames in the parent folder
+        query = f"'{parent_id}' in parents and trashed=false"
+        results = self.service.files().list(q=query, fields="files(name)").execute()
+        existing_names = {f['name'] for f in results.get('files', [])}
+        
+        if desired_name not in existing_names:
+            return desired_name
+            
+        name_stem, name_ext = os.path.splitext(desired_name)
+        counter = 1
+        while True:
+            new_name = f"{name_stem} ({counter}){name_ext}"
+            if new_name not in existing_names:
+                return new_name
+            counter += 1
+
+    def push_video(self, src_path: Path, parent_folder_id: str | None, name: str):
+        if not self.service or not parent_folder_id: return None
+        final_name = self._get_unique_name(parent_folder_id, name)
+        file_metadata = {'name': final_name, 'parents': [parent_folder_id]}
+        media = MediaFileUpload(str(src_path), mimetype='application/octet-stream', resumable=True)
+        file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return file.get('id')
+
+    def upload_content(self, content: bytes, name: str, parent_folder_id: str | None, mimetype: str) -> str | None:
+        """Uploads bytes content to a file in Google Drive."""
+        if not self.service or not parent_folder_id: return None
+        file_metadata = {'name': name, 'parents': [parent_folder_id]}
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mimetype, resumable=True)
+        file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return file.get('id')
+
+# Initialize Drive
+try:
+    DRIVE = GoogleDrive(CLIENT_SECRET_FILE, GDRIVE_ROOT_FOLDER_ID)
+except Exception as e:
+    print(f"CRITICAL: Could not instantiate GoogleDrive client. {e}")
+    DRIVE = None
+
+# --- Fake OCR (extract digits/letters from filename) ---
 WBID_REGEX = re.compile(r"([A-Za-z]{2}\d{6}|\d{4,})")
 
 def fake_ocr_guess_id(file_path: Path) -> tuple[str, float]:
@@ -112,35 +227,40 @@ def fake_ocr_guess_id(file_path: Path) -> tuple[str, float]:
     short = uuid.uuid4().hex[:8].upper()
     return f"WB{short}", 0.50
 
-# ----------------------------
-# Background pipeline steps
-# ----------------------------
-
+# --- Background pipeline steps ---
 def run_ocr_and_push(job_id: str, src_path: Path):
     job = JOBS[job_id]
     try:
         # 1) OCR
-        wbid, conf = fake_ocr_guess_id(src_path)
+        wbid, conf = fake_ocr_guess_id(Path(job.original_name))
         job.whiteboard_id = wbid
         job.ocr_confidence = conf
         job.status = "OCR_OK" if conf >= 0.85 else "NEEDS_REVIEW"
         job.updated_at = time.time()
 
         # 2) Canonicalize name & push to "Drive"
-        canonical_name = f"{wbid}.360"
+        canonical_name = job.original_name
+        
+        # Calculate Checksum
+        checksum = calculate_sha256(src_path)
+
         manifest = {
             "job_id": job.id,
             "whiteboard_id": wbid,
             "source": str(src_path.name),
             "canonical_name": canonical_name,
-            "source_checksum": "sha256:TODO",
+            "source_checksum": checksum,
             "size_bytes": src_path.stat().st_size,
             "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "ocr_confidence": conf,
         }
-        DRIVE.push_video(src_path, wbid)
-        DRIVE.write_manifest(wbid, manifest)
+        
+        if not DRIVE or not DRIVE.service:
+            raise Exception("Google Drive service is not available.")
 
+        to_process_folder_id = DRIVE.ensure_to_process(wbid)
+        DRIVE.push_video(src_path, to_process_folder_id, canonical_name)
+        DRIVE.write_manifest(manifest, to_process_folder_id)
         IDX_BY_WBID[wbid] = job.id
         job.status = "PUSHED_TO_DRIVE"
         job.updated_at = time.time()
@@ -148,8 +268,8 @@ def run_ocr_and_push(job_id: str, src_path: Path):
         job.status = "FAILED"
         job.notes.append(f"pipeline error: {e}")
         job.updated_at = time.time()
-        raise
-
+        print(f"Job {job_id} failed: {e}")
+        logger.exception(f"Job {job_id} failed")
 
 def simulate_agent_process(wbid: str):
     """Simulate the sponsor agent: download from ToProcess, run Agisoft, upload to Processed."""
@@ -159,50 +279,56 @@ def simulate_agent_process(wbid: str):
     job = JOBS[job_id]
 
     # Sanity checks
-    toproc = TO_PROCESS / wbid
-    video = toproc / "video.360"
-    manifest = toproc / "manifest.json"
-    if not video.exists() or not manifest.exists():
-        raise RuntimeError("missing ToProcess/video.360 or manifest.json")
+    if job.status != "PUSHED_TO_DRIVE":
+        raise RuntimeError(f"Job {job_id} is not ready for processing (status: {job.status})")
+    if not DRIVE or not DRIVE.service:
+        raise RuntimeError("Google Drive service is not available for agent processing.")
 
     # Mark processing
     job.status = "PROCESSING"
     job.updated_at = time.time()
 
+    # The real agent would now download the video from the 'ToProcess' folder in Google Drive.
+    # Simulate this by just moving to the next step.
+
     # "Run Agisoft" (sleep to simulate), then publish outputs
     time.sleep(1.0)
-    out = DRIVE.ensure_processed(wbid)
+    processed_folder_id = DRIVE.ensure_processed(wbid)
+    if not processed_folder_id:
+        raise RuntimeError(f"Could not create 'Processed' folder for {wbid} in Google Drive.")
 
-    # viewer.glb (tiny placeholder), report.pdf (actually a .txt for demo), log
-    (out / "model").mkdir(exist_ok=True)
-    (out / "report").mkdir(exist_ok=True)
-    (out / "logs").mkdir(exist_ok=True)
+    # Create subfolders and upload placeholder artifacts
+    model_folder_id = DRIVE._get_or_create_folder("model", processed_folder_id)
+    report_folder_id = DRIVE._get_or_create_folder("report", processed_folder_id)
+    logs_folder_id = DRIVE._get_or_create_folder("logs", processed_folder_id)
 
-    (out / "model" / "viewer.glb").write_bytes(b"glb-placeholder")
-    (out / "report" / f"{wbid}_report.txt").write_text("Demo report for job " + job_id)
-    (out / "logs" / "run.log").write_text("Simulated Metashape run OK")
+    model_id = DRIVE.upload_content(b"glb-placeholder", "viewer.glb", model_folder_id, "model/gltf-binary")
+    report_id = DRIVE.upload_content(f"Demo report for job {job_id}".encode(), f"{wbid}_report.txt", report_folder_id, "text/plain")
+    log_id = DRIVE.upload_content("Simulated Metashape run OK".encode(), "run.log", logs_folder_id, "text/plain")
 
     # done.json
     done = {
         "job_id": job_id,
         "whiteboard_id": wbid,
         "artifacts": [
-            {"kind": "MODEL", "path": str((out / "model" / "viewer.glb").resolve())},
-            {"kind": "REPORT", "path": str((out / "report" / f"{wbid}_report.txt").resolve())},
-            {"kind": "LOG", "path": str((out / "logs" / "run.log").resolve())},
+            {"kind": "MODEL", "drive_id": model_id},
+            {"kind": "REPORT", "drive_id": report_id},
+            {"kind": "LOG", "drive_id": log_id},
         ],
     }
-    (out / "done.json").write_text(json.dumps(done, indent=2))
+    DRIVE.upload_content(json.dumps(done, indent=2).encode(), "done.json", processed_folder_id, "application/json")
 
     # Callback (inline for demo): mark PROCESSED
     job.artifacts = done["artifacts"]
     job.status = "PROCESSED"
     job.updated_at = time.time()
 
-# ----------------------------
-# FastAPI app & endpoints
-# ----------------------------
+# --- FastAPI app & endpoints ---
 app = FastAPI(title="Mini Inspector Pipeline")
+
+@app.get("/")
+def root():
+    return {"message": "Elite Maintenance Pipeline Backend is running. Visit /docs for the API UI."}
 
 @app.get("/healthz")
 def healthz():
@@ -225,7 +351,7 @@ async def upload(file: UploadFile, background_tasks: BackgroundTasks):
     job = Job(id=job_id, original_name=file.filename)
     JOBS[job_id] = job
 
-    # Kick off OCR→Drive push in background
+    # Kick off OCR->Drive push in background
     background_tasks.add_task(run_ocr_and_push, job_id, dest)
 
     return {"job_id": job_id, "status": job.status}
