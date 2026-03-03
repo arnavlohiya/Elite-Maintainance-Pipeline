@@ -1,8 +1,34 @@
+# --- Environment & Secrets ---
+.env.local
+token.json
+
+# --- Python & Virtual Environments ---
+.venv/
+venv/
 .py_venv/
 __pycache__/
-_uploads
-backendDemo.py
-.DS_Store
-.pytest_cache
+*.pyc
+.pytest_cache/
+
+# --- Node.js & Next.js ---
+node_modules/
+.next/
+
+# --- Django & Databases ---
+db.sqlite3
+*.db
+
+# --- Project Specific (Videos/3D/Uploads) ---
+# Ignoring raw 360 videos and processing folders
 *.360
-token.json
+_uploads/
+backend/_uploads/
+backend/_drive/
+backend/_models/
+
+# --- macOS & IDE ---
+.DS_Store
+.vscode/
+
+# --- Temporary/Demo Files ---
+backendDemo.py
