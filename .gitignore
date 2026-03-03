@@ -1,3 +1,8 @@
 .py_venv/
+__pycache__/
+_uploads
 backendDemo.py
 .DS_Store
+.pytest_cache
+*.360
+token.json
