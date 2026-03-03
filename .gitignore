@@ -4,6 +4,7 @@ backend/_drive/
 backend/_models/
 node_modules/
 .next/
+_uploads
 # IDE
 .vscode/
 
@@ -13,6 +14,12 @@ node_modules/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.py_venv
+
+
+# Django
+db.sqlite3
 
 # Local databases
 *.db
@@ -23,3 +30,5 @@ venv/
 
 # Node
 node_modules/
+*.360
+token.json
