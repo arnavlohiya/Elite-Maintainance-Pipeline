@@ -1,7 +1,7 @@
 import os
 import re, string
 from pathlib import Path
-from ocr_api import run_ocr, API_KEY 
+from web.backend.ocr_api import run_ocr, API_KEY 
 
 WHITEBOARD_PATH = Path.cwd() / Path('sample_images/ocr_img1.jpg') # path to the whiteboard image with tag ID 
 VIDEO_PATH = Path.cwd() / Path('360_files/GS012395.mp4') # path to dummy video to be renamed

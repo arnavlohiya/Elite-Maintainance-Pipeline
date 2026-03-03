@@ -1,7 +1,7 @@
 import os
 import time # solely for demo
 from pathlib import Path
-from f_rename import extract_tag, rename_video
+from infrastructure.file_system.f_rename import extract_tag, rename_video
 from collections import deque
 
 VIDEO_FOLDER_PATH = Path.cwd() / Path('videos')
