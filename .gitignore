@@ -1,6 +1,7 @@
 # --- Environment & Secrets ---
 .env.local
 token.json
+client_secret.json
 
 # --- Python & Virtual Environments ---
 .venv/
@@ -29,6 +30,3 @@ backend/_models/
 # --- macOS & IDE ---
 .DS_Store
 .vscode/
-
-# --- Temporary/Demo Files ---
-backendDemo.py
