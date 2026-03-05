@@ -23,9 +23,9 @@ db.sqlite3
 # Ignoring raw 360 videos and processing folders
 *.360
 _uploads/
-backend/_uploads/
-backend/_drive/
-backend/_models/
+src/web/backend/_uploads/
+src/web/backend/_drive/
+src/web/backend/_models/
 
 # --- macOS & IDE ---
 .DS_Store
