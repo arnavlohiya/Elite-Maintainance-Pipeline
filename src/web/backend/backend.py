@@ -27,6 +27,8 @@ Replace the fake OCR logic later with real processing.
 """
 from __future__ import annotations
 from fastapi import FastAPI, UploadFile, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 import shutil, hashlib, logging
@@ -58,9 +60,12 @@ if not GDRIVE_ROOT_FOLDER_ID:
 # Paths
 BASE = Path(__file__).resolve().parent
 UPLOADS_DIR = BASE / "_uploads"
+MODELS_DIR = BASE / "_models"
 # Assumes client_secret.json is three levels up from this script (repo root)
 CLIENT_SECRET_FILE = BASE.parent.parent.parent / "client_secret.json"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # --- In-memory data models ---
 class Job(BaseModel):
@@ -320,6 +325,18 @@ def simulate_agent_process(wbid: str):
 # --- FastAPI app & endpoints ---
 app = FastAPI(title="Mini Inspector Pipeline")
 
+# Allow CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+app.mount("/static/models", StaticFiles(directory=str(MODELS_DIR)), name="static_models")
+ALLOWED_MODEL_EXTS = {'.glb', '.gltf'}
+
 @app.get("/")
 def root():
     return {"message": "Elite Maintenance Pipeline Backend is running. Visit /docs for the API UI."}
@@ -369,3 +386,35 @@ def agent_process(whiteboard_id: str):
         return {"ok": True, "job_id": job_id}
     except Exception as e:
         raise HTTPException(400, str(e))
+    
+@app.post("/models/upload")
+async def upload_model(file: UploadFile):
+    if not file.filename:
+        raise HTTPException(400, "filename required")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_MODEL_EXTS:
+        raise HTTPException(422, f"Unsupported type. Allowed: {', '.join(ALLOWED_MODEL_EXTS)}")
+
+    safe_name = f"{uuid.uuid4().hex[:8]}_{file.filename}"
+    dest = MODELS_DIR / safe_name
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    return {
+        "filename": safe_name,
+        "original_name": file.filename,
+        "url": f"/static/models/{safe_name}",
+    }
+
+@app.get("/models")
+def list_models():
+    models = []
+    for f in sorted(MODELS_DIR.iterdir(), key=lambda x: -x.stat().st_mtime):
+        if f.suffix.lower() in ALLOWED_MODEL_EXTS:
+            models.append({
+                "filename": f.name,
+                "url": f"/static/models/{f.name}",
+                "size_bytes": f.stat().st_size,
+                "uploaded_at": f.stat().st_mtime,
+            })
+    return {"data": models}

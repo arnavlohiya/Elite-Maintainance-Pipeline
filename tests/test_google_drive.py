@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import the module to be tested
-from src.web.backend import backend_demo as backendDemo
+from src.web.backend import backend as backendDemo
 
 class TestGoogleDrive(unittest.TestCase):
     def setUp(self):
@@ -19,10 +19,10 @@ class TestGoogleDrive(unittest.TestCase):
         # Create a mock service object to be used in tests
         self.mock_service = MagicMock()
 
-    @patch("src.web.backend.backend_demo.build")
-    @patch("src.web.backend.backend_demo.Credentials")
-    @patch("src.web.backend.backend_demo.InstalledAppFlow")
-    @patch("src.web.backend.backend_demo.Request")
+    @patch("src.web.backend.backend.build")
+    @patch("src.web.backend.backend.Credentials")
+    @patch("src.web.backend.backend.InstalledAppFlow")
+    @patch("src.web.backend.backend.Request")
     @patch("pathlib.Path.exists")
     def test_init_with_valid_token(self, mock_exists, mock_request, mock_flow, mock_creds, mock_build):
         """Test initialization when a valid token.json exists."""
@@ -50,10 +50,10 @@ class TestGoogleDrive(unittest.TestCase):
         mock_build.assert_called_with('drive', 'v3', credentials=mock_creds_instance)
         self.assertEqual(drive.service, self.mock_service)
 
-    @patch("src.web.backend.backend_demo.build")
-    @patch("src.web.backend.backend_demo.Credentials")
-    @patch("src.web.backend.backend_demo.InstalledAppFlow")
-    @patch("src.web.backend.backend_demo.Request")
+    @patch("src.web.backend.backend.build")
+    @patch("src.web.backend.backend.Credentials")
+    @patch("src.web.backend.backend.InstalledAppFlow")
+    @patch("src.web.backend.backend.Request")
     @patch("pathlib.Path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_init_needs_auth_flow(self, mock_file, mock_exists, mock_request, mock_flow, mock_creds, mock_build):
@@ -163,7 +163,7 @@ class TestGoogleDrive(unittest.TestCase):
         unique_name = drive._get_unique_name("parent_id", "test_file.txt")
         self.assertEqual(unique_name, "test_file.txt")
 
-    @patch("src.web.backend.backend_demo.MediaIoBaseUpload")
+    @patch("src.web.backend.backend.MediaIoBaseUpload")
     def test_write_manifest(self, mock_media_upload):
         """Test uploading a manifest JSON file."""
         # Arrange
@@ -185,7 +185,7 @@ class TestGoogleDrive(unittest.TestCase):
         self.assertEqual(call_args[1]['body']['parents'], ['parent_id'])
         mock_media_upload.assert_called()
 
-    @patch("src.web.backend.backend_demo.MediaFileUpload")
+    @patch("src.web.backend.backend.MediaFileUpload")
     def test_push_video(self, mock_media_upload):
         """Test uploading a video file."""
         # Arrange
@@ -198,7 +198,7 @@ class TestGoogleDrive(unittest.TestCase):
         canonical_name = "test_video.360"
         
         # Act
-        file_id = drive.push_video(video_path, "parent_id", canonical_name)
+        file_id = drive.push_video(video_path, "parent_id")
 
         # Assert
         self.assertEqual(file_id, 'video_file_id')
@@ -264,7 +264,7 @@ class TestGoogleDrive(unittest.TestCase):
         # Assert
         self.assertIsNone(result)
 
-    @patch("src.web.backend.backend_demo.MediaIoBaseUpload")
+    @patch("src.web.backend.backend.MediaIoBaseUpload")
     def test_upload_content(self, mock_media_upload):
         """Test uploading bytes content to Google Drive."""
         # Arrange
@@ -340,7 +340,7 @@ class TestGoogleDrive(unittest.TestCase):
         drive.service = None
         
         # Act
-        result = drive.push_video(Path("video.360"), "parent_id", "video.360")
+        result = drive.push_video(Path("video.360"), "parent_id")
         
         # Assert
         self.assertIsNone(result)
@@ -402,10 +402,10 @@ class TestGoogleDrive(unittest.TestCase):
         # Should only use the last extension (.gz), so result is archive.tar (1).gz
         self.assertEqual(unique_name, "archive.tar (1).gz")
 
-    @patch("src.web.backend.backend_demo.build")
-    @patch("src.web.backend.backend_demo.Credentials")
-    @patch("src.web.backend.backend_demo.InstalledAppFlow")
-    @patch("src.web.backend.backend_demo.Request")
+    @patch("src.web.backend.backend.build")
+    @patch("src.web.backend.backend.Credentials")
+    @patch("src.web.backend.backend.InstalledAppFlow")
+    @patch("src.web.backend.backend.Request")
     @patch("pathlib.Path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_init_credential_refresh(self, mock_file, mock_exists, mock_request, mock_flow, mock_creds, mock_build):

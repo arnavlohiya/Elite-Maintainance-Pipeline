@@ -3,9 +3,10 @@ import React from 'react';
 import JobDetail from '@/components/JobDetail';
 
 export default function JobDetailPage({ params }) {
+  const resolvedParams = React.use(params);
   return (
     <main style={{ padding: 24 }}>
-      <JobDetail jobId={params.id} />
+      <JobDetail jobId={resolvedParams.id} />
     </main>
   );
 }
