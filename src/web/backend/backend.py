@@ -301,7 +301,20 @@ def simulate_agent_process(wbid: str):
     report_folder_id = DRIVE._get_or_create_folder("report", processed_folder_id)
     logs_folder_id = DRIVE._get_or_create_folder("logs", processed_folder_id)
 
-    model_id = DRIVE.upload_content(b"glb-placeholder", "viewer.glb", model_folder_id, "model/gltf-binary")
+    # Use a valid GLB placeholder if it exists
+    placeholder_path = MODELS_DIR / "placeholder.glb"
+    if placeholder_path.exists():
+        with placeholder_path.open("rb") as f:
+            model_content = f.read()
+        
+        model_id = DRIVE.upload_content(model_content, "viewer.glb", model_folder_id, "model/gltf-binary")
+        local_model_path = MODELS_DIR / f"{wbid}.glb"
+        with local_model_path.open("wb") as f:
+            f.write(model_content)
+    else:
+        logger.warning(f"placeholder.glb missing in {MODELS_DIR}. Skipping local model creation.")
+        model_id = None 
+
     report_id = DRIVE.upload_content(f"Demo report for job {job_id}".encode(), f"{wbid}_report.txt", report_folder_id, "text/plain")
     log_id = DRIVE.upload_content("Simulated Metashape run OK".encode(), "run.log", logs_folder_id, "text/plain")
 
@@ -310,7 +323,7 @@ def simulate_agent_process(wbid: str):
         "job_id": job_id,
         "whiteboard_id": wbid,
         "artifacts": [
-            {"kind": "MODEL", "drive_id": model_id},
+            {"kind": "MODEL", "drive_id": model_id, "url": f"/static/models/{wbid}.glb"},
             {"kind": "REPORT", "drive_id": report_id},
             {"kind": "LOG", "drive_id": log_id},
         ],

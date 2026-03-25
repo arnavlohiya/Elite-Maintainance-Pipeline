@@ -29,6 +29,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import StorageIcon from '@mui/icons-material/Storage';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import StatusPill from '@/components/StatusPill';
 
 const STATUS_OPTIONS = [
@@ -182,6 +183,7 @@ export default function JobsTable() {
               <TableCell>Whiteboard ID</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Created</TableCell>
+              <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -199,6 +201,23 @@ export default function JobsTable() {
                 </TableCell>
                 <TableCell>
                   {new Date(job.created_at * 1000).toLocaleString()}
+                </TableCell>
+                <TableCell align="right">
+                  <Tooltip title={job.status === 'PROCESSED' ? "View 3D Model" : "Model not ready"}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        disabled={job.status !== 'PROCESSED' || !job.whiteboard_id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          router.push(`/viewer?jobId=${job.id}&model=/static/models/${job.whiteboard_id}.glb&name=${job.whiteboard_id}`);
+                        }}
+                      >
+                        <ViewInArIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </TableCell>
               </TableRow>
             ))}

@@ -5,13 +5,23 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Environment, Center, Grid } from '@react-three/drei';
 import { Box } from '@mui/material';
 
-function Model({ url }) {
-  const { scene } = useGLTF(url);
-  return (
-    <Center>
-      <primitive object={scene} />
-    </Center>
-  );
+function Model({ url, onError }) {
+  try {
+    const { scene } = useGLTF(url);
+    return (
+      <Center>
+        <primitive object={scene} />
+      </Center>
+    );
+  } catch (err) {
+    // If it's a promise, it's just Suspense loading - re-throw it!
+    if (err instanceof Promise) throw err;
+    
+    // Otherwise, it's a real error
+    console.error("GLTF Load Error:", err);
+    if (onError) onError(err);
+    return null;
+  }
 }
 
 function LoadingBox() {
@@ -23,7 +33,7 @@ function LoadingBox() {
   );
 }
 
-export default function ModelViewer({ url }) {
+export default function ModelViewer({ url, onError }) {
   return (
     <Box
       sx={{
@@ -34,14 +44,20 @@ export default function ModelViewer({ url }) {
         overflow: 'hidden',
       }}
     >
-      <Canvas camera={{ position: [0, 1.5, 4], fov: 50 }} gl={{ antialias: true }}>
+      <Canvas 
+        camera={{ position: [0, 1.5, 4], fov: 50 }} 
+        gl={{ antialias: true }}
+        onError={(err) => {
+          if (onError) onError(err);
+        }}
+      >
         <color attach="background" args={['#0f1117']} />
         <ambientLight intensity={0.5} />
         <directionalLight position={[5, 8, 5]} intensity={1.2} castShadow />
         <directionalLight position={[-5, 3, -5]} intensity={0.4} />
 
         <Suspense fallback={<LoadingBox />}>
-          <Model url={url} />
+          <Model url={url} onError={onError} />
           <Environment preset="city" />
         </Suspense>
 

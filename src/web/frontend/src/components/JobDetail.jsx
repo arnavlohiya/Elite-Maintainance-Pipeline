@@ -161,7 +161,7 @@ export default function JobDetail({ jobId }) {
                   size="small"
                   variant="contained"
                   startIcon={<ViewInArIcon />}
-                  onClick={() => router.push('/viewer')}
+                  onClick={() => router.push(`/viewer?jobId=${job.id}&model=/static/models/${job.whiteboard_id}.glb&name=${job.whiteboard_id}`)}
                 >
                   View 3D Model
                 </Button>
